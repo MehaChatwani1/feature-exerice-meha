@@ -45,7 +45,8 @@ class ShoppingCartController extends BaseController {
         if($_POST['action'] == 'Add') {
             if($_POST['buy_quantity'] > 0){
                 // Calculate price and set buy_price and buy_qty into set
-                $totalPrice = $this->TotalPriceCal($_POST);
+                $purchaseProductArr = $this->FetchSessionProductData();
+                $totalPrice = $this->TotalPriceCal($_POST, $purchaseProductArr);
                 if(isset($_SESSION['SHOPPINGCART']['PRODUCTLIST'][$_POST['proid']]['buy_price'])) {
                     $grandTotal = $grandTotal - $_SESSION['SHOPPINGCART']['PRODUCTLIST'][$_POST['proid']]['buy_price'];
                 }
@@ -80,7 +81,7 @@ class ShoppingCartController extends BaseController {
     // For Calculate Buy Price and Grand Total Price with Spceial price conditions 
     // @return total price
     // @param array $model -> Product details array
-    private function TotalPriceCal($model) {
+    private function TotalPriceCal($model,$purchaseProductArr = array()) {
         $totalPrice = 0;
         if($model['offer_values'] !== NULL){
             $offerArr = json_decode(html_entity_decode($model['offer_values']), true);
@@ -88,14 +89,12 @@ class ShoppingCartController extends BaseController {
                 $offerCount = count($offerArr) - 1;
                 foreach ($offerArr as $key => $value) {
                     if($model['buy_quantity'] > 0) {
-                        if(!empty($value['add'])) {
-                        } else {
-                            $totalPriceValue = $this->CalculatespecialPrice($model['buy_quantity'], $value['qty'], $totalPrice, $model['price'], $value['price'], $offerCount);
-                            if(!empty($totalPriceValue)) {
-                                $totalPrice = $totalPriceValue['totalPrice'];
-                                $model['buy_quantity'] = $totalPriceValue['buyQuantity'];
-                                $offerCount = $totalPriceValue['offerCount'];
-                            }
+                        $totalPriceValue = $this->CalculatespecialPrice($model['buy_quantity'], $value['qty'], $totalPrice, $model['price'], $value['price'], $offerCount, $value['add'], $purchaseProductArr);
+                        if(!empty($totalPriceValue)) {
+                            $totalPrice = $totalPriceValue['totalPrice'];
+                            $model['buy_quantity'] = $totalPriceValue['buyQuantity'];
+                            $offerCount = $totalPriceValue['offerCount'];
+                            $purchaseProductArr = $totalPriceValue['purchaseProductArr'];
                         }
                     }
                 }
@@ -118,11 +117,12 @@ class ShoppingCartController extends BaseController {
         if(!empty($model)) {
             $is_session_set = false;
             $grandTotal = 0;
+            $purchaseProductArr = array();
             // Check session is set or not
             if(isset($_SESSION['SHOPPINGCART']['PRODUCTLIST']) && !empty($_SESSION['SHOPPINGCART']['PRODUCTLIST'])) {
                 $is_session_set = true;
                 $sessionCartValue = $_SESSION['SHOPPINGCART']['PRODUCTLIST'];
-                $purchaseProductArr = array_column($_SESSION['SHOPPINGCART']['PRODUCTLIST'], 'name');
+                $purchaseProductArr = $this->FetchSessionProductData();
             }
             foreach ($model as $key => $value) {
                 if($is_session_set && isset($sessionCartValue[md5($value['id'])])) {
@@ -140,7 +140,7 @@ class ShoppingCartController extends BaseController {
                         // Calculate price again on loading pages
                         $model[$key]['buy_quantity'] = $sessionCartValue[md5($value['id'])]['buy_quantity'];
                         $model[$key]['action'] = 'Remove';
-                        $totalPrice = $this->TotalPriceCal($model[$key]);
+                        $totalPrice = $this->TotalPriceCal($model[$key], $purchaseProductArr);
                         if($sessionCartValue[md5($value['id'])]['buy_price'] != $totalPrice) {
                             $model[$key]['buy_price'] = $totalPrice;
                             $_SESSION['SHOPPINGCART']['PRODUCTLIST'][md5($value['id'])]['buy_price'] = $totalPrice;
@@ -173,29 +173,62 @@ class ShoppingCartController extends BaseController {
     // For Calculate Buy Price and Grand Total Price with Spceial price conditions 
     // @return total price
     // @param array $model -> Product details array
-    private function CalculatespecialPrice($buyQuantity, $offerQty, $totalPrice, $productPrice, $offerPrice, $offerCount) {
+    private function CalculatespecialPrice($buyQuantity, $offerQty, $totalPrice, $productPrice, $offerPrice, $offerCount, $offerProduct, $purchaseProductArr) {
         if($buyQuantity > 0){
             if($buyQuantity >= $offerQty)  {
-                // Get Combination qty and calculation Prince according to that
-                $totalPrice = $totalPrice + $offerPrice;
-                $buyQuantity = $buyQuantity - $offerQty;
-                return $this->CalculatespecialPrice($buyQuantity, $offerQty, $totalPrice, $productPrice, $offerPrice, $offerCount);
+                if(!empty($offerProduct)) {
+                    if(in_array($offerProduct, array_column($purchaseProductArr, 'name')) && ($buyQuantity >= $purchaseProductArr[$offerProduct]['buy_quantity']) && ($purchaseProductArr[$offerProduct]['buy_quantity'] > 0)) {
+                        $totalPrice = $totalPrice + $offerPrice;
+                        $buyQuantity = $buyQuantity - $offerQty;
+                        $purchaseProductArr[$offerProduct]['buy_quantity']  = $purchaseProductArr[$offerProduct]['buy_quantity'] - $offerQty;
+                        return $this->CalculatespecialPrice($buyQuantity, $offerQty, $totalPrice, $productPrice, $offerPrice, $offerCount,$offerProduct, $purchaseProductArr);
+                    } else {
+                        if($offerCount <= 0) {
+                            $totalPrice = $totalPrice + $buyQuantity * $productPrice;
+                            $buyQuantity = $buyQuantity - $buyQuantity;
+                            return $this->CalculatespecialPrice($buyQuantity, $offerQty, $totalPrice, $productPrice, $offerPrice, $offerCount,$offerProduct, $purchaseProductArr);
+                        } else {
+                            $offerCount = $offerCount - 1;
+                            $return_arr = array('totalPrice' => $totalPrice, 'buyQuantity' => $buyQuantity, 'offerCount' => $offerCount, 'purchaseProductArr' => $purchaseProductArr);
+                            return $return_arr;
+                        }
+                    }
+                } else {
+                    // Get Combination qty and calculation Prince according to that
+                    $totalPrice = $totalPrice + $offerPrice;
+                    $buyQuantity = $buyQuantity - $offerQty;
+                    return $this->CalculatespecialPrice($buyQuantity, $offerQty, $totalPrice, $productPrice, $offerPrice, $offerCount, $offerProduct, $purchaseProductArr);
+                }
             } else {
-                if($offerCount == 0) {
+                if($offerCount <= 0) {
                     $totalPrice = $totalPrice + $buyQuantity * $productPrice;
                     $buyQuantity = $buyQuantity - $buyQuantity;
-                    return $this->CalculatespecialPrice($buyQuantity, $offerQty, $totalPrice, $productPrice, $offerPrice, $offerCount);
+                    return $this->CalculatespecialPrice($buyQuantity, $offerQty, $totalPrice, $productPrice, $offerPrice, $offerCount, $offerProduct, $purchaseProductArr);
                 } else {
                     $offerCount = $offerCount - 1;
-                    $return_arr = array('totalPrice' => $totalPrice, 'buyQuantity' => $buyQuantity, 'offerCount' => $offerCount);
+                    $return_arr = array('totalPrice' => $totalPrice, 'buyQuantity' => $buyQuantity, 'offerCount' => $offerCount, 'purchaseProductArr' => $purchaseProductArr);
                     return $return_arr;
-                }
+                }   
             }
         } else {
             $offerCount = $offerCount - 1;
-            $return_arr = array('totalPrice' => $totalPrice, 'buyQuantity' => $buyQuantity, 'offerCount' => $offerCount);
-            return $return_arr;
+            $return_arr = array('totalPrice' => $totalPrice, 'buyQuantity' => $buyQuantity, 'offerCount' => $offerCount, 'purchaseProductArr' => $purchaseProductArr);
+            return $return_arr;   
         }
+    }
+
+    // @return Product name with its qty
+    // @param void
+    public function FetchSessionProductData() {
+        $purchaseProductArr = array();
+        $sessionCartValue = $_SESSION['SHOPPINGCART']['PRODUCTLIST'];
+        foreach ($sessionCartValue as $key => $value) {
+            $purchaseProductArr[$value['name']] = array(
+                'name' => $value['name'],
+                'buy_quantity' => $value['buy_quantity'],
+            );
+        }
+        return $purchaseProductArr;
     }
 
     public function CheckSession() {
