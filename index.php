@@ -9,7 +9,7 @@ if(!isset($_SESSION)) {
 
 class FrontController {
     
-    const DefaultController = 'ShoppingCart';
+    const DefaultController = 'Welcome';
     const PublicControllers = [];
     
     //  @return bool
